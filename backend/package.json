@@ -6,16 +6,23 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "telegram:login": "tsx src/telegram/login.ts",
-    "typecheck": "tsc --noEmit"
+    "db:snapshot": "tsx src/snapshot.ts",
+    "verify": "tsx src/verify.ts",
+    "eval:fetch": "tsx src/eval/fetch.ts",
+    "eval": "tsx src/eval/run.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "DB_FILE=:memory: LLM_PROVIDER=mock APP_PASSWORD=test-pass X_MONTHLY_BUDGET_USD=1 APIFY_TOKEN=test node --import tsx --test src/test/*.test.ts"
   },
   "type": "module",
   "dependencies": {
+    "@types/sentiment": "^5.0.4",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "graphology": "^0.26.0",
     "graphology-communities-louvain": "^2.0.2",
     "graphology-metrics": "^2.4.2",
     "groq-sdk": "^1.6.0",
+    "sentiment": "^5.0.2",
     "telegram": "^2.26.22"
   },
   "devDependencies": {

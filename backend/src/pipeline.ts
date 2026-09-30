@@ -6,6 +6,12 @@ import { ensureTopics } from "./analysis/topics.js";
 import { llmAvailable, LlmPausedError, llmState } from "./llm/groq.js";
 import { fetchBios, syncSource } from "./telegram/collector.js";
 import { getTelegram } from "./telegram/client.js";
+import { sealNew } from "./chain.js";
+import { apifyConfigured, ApifyBudgetError } from "./x/apify.js";
+import { fetchThreads, pendingThreads, syncSource as syncX } from "./x/collector.js";
+import * as meta from "./meta/collector.js";
+import * as reddit from "./reddit/collector.js";
+import * as youtube from "./youtube/collector.js";
 
 export const pipeline = {
   running: false,
@@ -45,7 +51,7 @@ export async function runCycle() {
   pipeline.lastError = "";
   try {
     if (await getTelegram()) {
-      for (const source of all("SELECT * FROM sources WHERE platform = 'telegram' ORDER BY id")) {
+      for (const source of all("SELECT * FROM sources WHERE platform = 'telegram' AND removed_at IS NULL ORDER BY id")) {
         const name = source.handle ? "@" + source.handle : source.title;
         note(`Collecting ${name}`);
         const n = await syncSource(source, (c) => (pipeline.stage = `Collecting ${name}: ${c} messages`));
@@ -54,6 +60,56 @@ export async function runCycle() {
       note("Fetching public bios");
       await fetchBios(config.pipeline.bioFetchPerCycle);
     }
+
+    if (apifyConfigured()) {
+      try {
+        for (const source of all("SELECT * FROM sources WHERE platform = 'x' AND removed_at IS NULL ORDER BY id")) {
+          note(`Collecting X ${source.title}`);
+          const n = await syncX(source);
+          note(`Collected ${n} new posts from X ${source.title}`);
+        }
+        if (pendingThreads()) {
+          note("Fetching X reply threads");
+          const n = await fetchThreads(config.x.threadsPerCycle);
+          note(`Stored ${n} X replies`);
+        }
+        for (const source of all("SELECT * FROM sources WHERE platform IN ('instagram','facebook') AND removed_at IS NULL ORDER BY id")) {
+          note(`Collecting ${source.platform} ${source.title}`);
+          note(`Collected ${await meta.syncSource(source)} new items from ${source.platform} ${source.title}`);
+        }
+        if (meta.pendingThreads()) note(`Stored ${await meta.fetchThreads(config.meta.threadsPerCycle)} Instagram/Facebook comments`);
+      } catch (e) {
+        // A used-up budget is a state, not a failure: say so and carry on with the LLM work.
+        if (e instanceof ApifyBudgetError) note(`X paused: ${e.message}`);
+        else throw e;
+      }
+    }
+
+    // Reddit and YouTube: free official APIs, so a failure on one source is logged and the
+    // cycle carries on with the next; nothing here can spend money.
+    for (const source of all("SELECT * FROM sources WHERE platform = 'reddit' AND removed_at IS NULL ORDER BY id")) {
+      try {
+        note(`Collecting ${source.title}`);
+        note(`Collected ${await reddit.syncSource(source)} new posts from ${source.title}`);
+      } catch (e) { note(`${source.title}: ${(e as Error).message}`); }
+    }
+    if (reddit.pendingThreads()) {
+      try { note(`Stored ${await reddit.fetchThreads(config.reddit.threadsPerCycle)} Reddit comments`); }
+      catch (e) { note(`Reddit comments: ${(e as Error).message}`); }
+    }
+    for (const source of all("SELECT * FROM sources WHERE platform = 'youtube' AND removed_at IS NULL ORDER BY id")) {
+      try {
+        note(`Collecting ${source.title}`);
+        note(`Collected ${await youtube.syncSource(source)} new comments from ${source.title}`);
+      } catch (e) { note(`${source.title}: ${(e as Error).message}`); }
+    }
+    if (youtube.pendingThreads()) {
+      try { note(`Stored ${await youtube.fetchThreads(5)} more YouTube replies`); }
+      catch (e) { note(`YouTube replies: ${(e as Error).message}`); }
+    }
+
+    const sealed = sealNew();
+    if (sealed) note(`Sealed ${sealed} new entries into the collection log`);
 
     await llmStep("Topic discovery", ensureTopics);
     await llmStep("Sentiment analysis", () =>
@@ -70,7 +126,9 @@ export async function runCycle() {
     pipeline.stage = llmState.lastError ? `idle (${llmState.lastError})` : "idle";
     pipeline.lastRunAt = nowSec();
     // While there is an analysis backlog, come back quickly instead of waiting a full interval.
-    const backlog = Number(get("SELECT COUNT(*) AS n FROM messages WHERE analyzed = 0")?.n ?? 0);
+    // Only an LLM backlog justifies the quick return: without a model configured the backlog
+    // never shrinks, and every quick cycle would fetch more paid X threads for nothing.
+    const backlog = llmAvailable() ? Number(get("SELECT COUNT(*) AS n FROM messages WHERE analyzed = 0")?.n ?? 0) : 0;
     // If Groq paused us, resume right when the pause ends (but never later than the normal interval).
     const normal = pipeline.lastRunAt + config.pipeline.syncIntervalSec;
     const resume = Math.max(pipeline.lastRunAt + 15, Math.ceil(llmState.pausedUntil / 1000) + 1);

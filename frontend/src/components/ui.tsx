@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useApi, type Source } from "../lib/api";
+import { getToken, useApi, type Source } from "../lib/api";
 import { useFilters } from "../lib/filters";
 import { fmtNum } from "../lib/format";
 
@@ -20,11 +20,48 @@ export function Page({ title, sub, children, filters = true }: { title: string; 
 
 const RANGES = [1, 7, 30, 90];
 
+const EXPORTS: { value: string; label: string; format: "csv" | "json" }[] = [
+  { value: "messages", label: "Messages with labels (CSV)", format: "csv" },
+  { value: "sentiment", label: "Sentiment timeline (CSV)", format: "csv" },
+  { value: "keywords", label: "Keywords and bursts (CSV)", format: "csv" },
+  { value: "topics", label: "Topics and forecasts (CSV)", format: "csv" },
+  { value: "nodes", label: "Network nodes (CSV)", format: "csv" },
+  { value: "edges", label: "Network edges (CSV)", format: "csv" },
+  { value: "segments", label: "Audience segments (CSV)", format: "csv" },
+  { value: "audience", label: "Audience aggregates (JSON)", format: "json" },
+  { value: "coordination", label: "Coordination findings (JSON)", format: "json" },
+  { value: "report", label: "Full report (JSON)", format: "json" },
+];
+
+/** One download per dataset for the current filters. The API is the product; this is a shortcut to it. */
+function ExportMenu() {
+  const { qs } = useFilters();
+  const token = getToken();
+  return (
+    <select
+      className="select"
+      aria-label="Export"
+      value=""
+      onChange={(e) => {
+        const item = EXPORTS.find((x) => x.value === e.target.value);
+        if (!item) return;
+        window.open(`/api/export${qs}&dataset=${item.value}&format=${item.format}${token ? `&token=${encodeURIComponent(token)}` : ""}`, "_blank");
+      }}
+    >
+      <option value="">Export…</option>
+      {EXPORTS.map((x) => (
+        <option key={x.value} value={x.value}>{x.label}</option>
+      ))}
+    </select>
+  );
+}
+
 function FilterBar() {
   const { source, setSource, days, setDays } = useFilters();
   const { data: sources } = useApi<Source[]>("/sources");
   return (
     <div className="filters">
+      <ExportMenu />
       <select
         className="select"
         aria-label="Source"
@@ -97,7 +134,7 @@ export function BarList({ rows, total }: { rows: { label: string; count: number 
 }
 
 /** Tiny inline trend line (plain SVG, no axes). Optional dashed forecast tail. */
-export function Spark({ values, forecast = [], width = 120, height = 28 }: { values: number[]; forecast?: number[]; width?: number; height?: number }) {
+export function Spark({ values, forecast = [], width = 120, height = 28, color = "var(--accent)" }: { values: number[]; forecast?: number[]; width?: number; height?: number; color?: string }) {
   const all = [...values, ...forecast];
   const max = Math.max(1, ...all);
   const x = (i: number) => (i / Math.max(1, all.length - 1)) * (width - 4) + 2;
@@ -110,8 +147,8 @@ export function Spark({ values, forecast = [], width = 120, height = 28 }: { val
     : "";
   return (
     <svg width={width} height={height} aria-hidden style={{ display: "block" }}>
-      <path d={line} fill="none" stroke="var(--g1)" strokeWidth={1.5} strokeLinejoin="round" />
-      {tail && <path d={tail} fill="none" stroke="var(--g3)" strokeWidth={1.5} strokeDasharray="3 3" />}
+      <path d={line} fill="none" stroke={color} strokeWidth={1.6} strokeLinejoin="round" />
+      {tail && <path d={tail} fill="none" stroke={color} strokeOpacity={0.55} strokeWidth={1.6} strokeDasharray="3 3" />}
     </svg>
   );
 }

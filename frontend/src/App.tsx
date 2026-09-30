@@ -1,7 +1,10 @@
+import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { useApi, type Status } from "./lib/api";
+import { getToken, useApi, type Status } from "./lib/api";
+import Login from "./pages/Login";
 import { fmtAgo } from "./lib/format";
 import Audience from "./pages/Audience";
+import Integrity from "./pages/Integrity";
 import Network from "./pages/Network";
 import Overview from "./pages/Overview";
 import Sentiment from "./pages/Sentiment";
@@ -14,11 +17,22 @@ const NAV = [
   { to: "/audience", label: "Audience" },
   { to: "/trends", label: "Trends" },
   { to: "/network", label: "Network" },
+  { to: "/integrity", label: "Integrity" },
   { to: "/sources", label: "Sources" },
 ];
 
 export default function App() {
-  const { data: status } = useApi<Status>("/status", 4000);
+  const [needsLogin, setNeedsLogin] = useState(false);
+  const { data: status, reload } = useApi<Status>("/status", 4000);
+
+  // Any 401 anywhere flips to the sign-in screen; a successful login flips back.
+  useEffect(() => {
+    const on = () => setNeedsLogin(true);
+    window.addEventListener("auth:required", on);
+    return () => window.removeEventListener("auth:required", on);
+  }, []);
+
+  if (needsLogin) return <Login onDone={() => { setNeedsLogin(false); reload(); }} />;
 
   return (
     <div className="shell">
@@ -42,8 +56,20 @@ export default function App() {
           </div>
           <div>
             <span className={`dot ${status?.llm.configured ? "on" : ""}`} />
-            Groq {status?.llm.configured ? (status.llm.pausedUntil > Date.now() ? <span className="warn">rate-limited</span> : "ready") : "no key"}
+            Model {status?.llm.configured ? (status.llm.pausedUntil > Date.now() ? <span className="warn">rate-limited</span> : "ready") : "not configured"}
           </div>
+          {status?.auth === "open" && (
+            <div>
+              <span className="dot" />
+              <span className="warn">API open</span> (no APP_PASSWORD)
+            </div>
+          )}
+          {status?.auth === "password" && getToken() && (
+            <div>
+              <span className="dot on" />
+              Signed in
+            </div>
+          )}
           {status && (
             <div className="stage">
               {status.pipeline.running ? status.pipeline.stage : `Last run ${fmtAgo(status.pipeline.lastRunAt)}`}
@@ -61,6 +87,7 @@ export default function App() {
           <Route path="/audience" element={<Audience />} />
           <Route path="/trends" element={<Trends />} />
           <Route path="/network" element={<Network />} />
+          <Route path="/integrity" element={<Integrity />} />
           <Route path="/sources" element={<Sources status={status} />} />
         </Routes>
       </main>

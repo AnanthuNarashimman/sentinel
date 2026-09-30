@@ -1,11 +1,26 @@
 import { useCallback, useEffect, useState } from "react";
 
+export const getToken = () => { try { return localStorage.getItem("token") ?? ""; } catch { return ""; } };
+export const setToken = (t: string) => { try { t ? localStorage.setItem("token", t) : localStorage.removeItem("token"); } catch { /* no storage */ } };
+
+export class AuthRequired extends Error {}
+
+// Same-origin by default (Vite proxies /api in dev; Vercel rewrites it in production). Set
+// VITE_API_BASE to call a backend on another host directly instead.
+const BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
+
 export async function api<T = any>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const token = getToken();
+  const res = await fetch(`${BASE}/api${path}`, {
     ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) },
   });
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && !path.startsWith("/auth/")) {
+    setToken("");
+    window.dispatchEvent(new Event("auth:required"));
+    throw new AuthRequired("sign in required");
+  }
   if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`);
   return body as T;
 }
@@ -42,9 +57,10 @@ export function useApi<T = any>(path: string | null, refreshMs?: number) {
 // ---- response shapes (only the fields the UI reads) ----
 export interface Source {
   id: number;
+  platform: "telegram" | "x" | "reddit" | "youtube" | "instagram" | "facebook";
   handle: string | null;
   title: string;
-  kind: "channel" | "group";
+  kind: "channel" | "group" | "handle" | "search" | "subreddit" | "video" | "page";
   linked_source_id: number | null;
   last_synced_at: number | null;
   messages: number;
@@ -55,6 +71,16 @@ export interface Source {
 export interface Status {
   telegram: { configured: boolean; authorized: boolean; error: string };
   llm: { configured: boolean; model: string; pausedUntil: number; error: string };
+  auth: "password" | "open";
+  x: {
+    configured: boolean;
+    actor: string;
+    spendMonthUsd: number;
+    budgetUsd: number;
+    account: { monthlyUsageUsd: number; maxMonthlyUsageUsd: number } | null;
+  };
+  reddit: { configured: boolean; mode: "api" | "feed" };
+  youtube: { configured: boolean };
   pipeline: { running: boolean; stage: string; lastRunAt: number; nextRunAt: number; lastError: string; log: { at: number; text: string }[] };
   counts: { sources: number; messages: number; pendingAnalysis: number; users: number; profiled: number; topics: number };
 }
